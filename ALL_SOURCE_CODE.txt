@@ -1,0 +1,1467 @@
+
+==========================================================================================
+FILE: README.md
+==========================================================================================
+# DISCIPLINE QUEST — FULL ANDROID SOURCE
+
+This is the complete source project for the personal discipline RPG app requested.
+
+## Included
+- Native Android / Kotlin / Jetpack Compose
+- Room local database
+- Offline-first task, habit, mission and progress tracking
+- Black + red gaming UI
+- HP / XP / level / rank / coins
+- One-time tasks
+- Habits and streaks
+- Missed-task penalties and recovery
+- Calendar
+- Daily / historical progress records
+- Discipline score
+- Missions
+- Achievements
+- Cosmetic coin shop
+- Character/profile
+- Export/import JSON backup
+- Optional notifications
+- Burmese/English setting
+- AI Coach with preview/edit-before-save workflow
+- Free-tier Gemini model integration
+- Generated app icon included
+
+## AI / ZERO-COST REQUIREMENT
+
+The AI layer is optional. The core app never requires AI.
+
+The current Gemini configuration is:
+    gemini-3.8-flash
+
+The Gemini API currently lists Gemini 3.8 Flash with a Free Tier. The app never enables billing and does not contain a paid API key.
+
+For a personal app, put only a Free-Tier Gemini API key into:
+Settings -> AI Coach -> Gemini API Key.
+
+Do NOT enable Google Cloud billing for this app if your requirement is zero cost.
+
+Important security note:
+A client-side API key can be extracted from a compiled APK. This project is designed for personal/sideloaded use, not for distributing a public app with a secret key. For a public release, move the Gemini request to a server-side proxy.
+
+## BUILD
+
+1. Open this folder in Android Studio.
+2. Wait for Gradle Sync.
+3. Run on an Android device/emulator.
+4. For an APK:
+   Build -> Generate App Bundles or APKs -> Generate APKs.
+
+No Play Store account is needed for personal sideloading.
+
+## AI USE
+
+The AI Coach:
+1. accepts a goal,
+2. generates a mission/task plan,
+3. shows a PREVIEW,
+4. lets you edit/delete the AI output,
+5. only saves after you press ACCEPT & SAVE.
+
+The AI never directly writes XP, HP, coins, level, streak or achievement state.
+
+## App icon
+
+`app/src/main/res/drawable/app_icon.png` is the generated black/red Discipline Quest icon.
+
+==========================================================================================
+FILE: app/build.gradle.kts
+==========================================================================================
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.plugin.compose")
+    id("com.google.devtools.ksp")
+}
+android {
+    namespace = "com.disciplinequest.app"
+    compileSdk = 35
+    defaultConfig {
+        applicationId = "com.disciplinequest.app"
+        minSdk = 26
+        targetSdk = 35
+        versionCode = 1
+        versionName = "1.0.0"
+    }
+    buildFeatures { compose = true }
+    packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
+}
+dependencies {
+    val composeBom = platform("androidx.compose:compose-bom:2025.01.01")
+    implementation(composeBom)
+    androidTestImplementation(composeBom)
+    implementation("androidx.core:core-ktx:1.15.0")
+    implementation("androidx.activity:activity-compose:1.10.1")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.ui:ui-tooling-preview")
+    debugImplementation("androidx.compose.ui:ui-tooling")
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-extended")
+    implementation("androidx.navigation:navigation-compose:2.8.7")
+    implementation("androidx.room:room-runtime:2.6.1")
+    implementation("androidx.room:room-ktx:2.6.1")
+    ksp("androidx.room:room-compiler:2.6.1")
+    implementation("androidx.datastore:datastore-preferences:1.1.2")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+}
+
+==========================================================================================
+FILE: app/src/main/AndroidManifest.xml
+==========================================================================================
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
+    <application android:theme="@style/Theme.DisciplineQuest" android:label="Discipline Quest" android:icon="@drawable/app_icon" android:allowBackup="true">
+        <activity android:name=".MainActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+        <receiver android:name=".ReminderReceiver" android:exported="false"/>
+    </application>
+</manifest>
+
+==========================================================================================
+FILE: app/src/main/java/com/disciplinequest/app/AppDefaults.kt
+==========================================================================================
+package com.disciplinequest.app
+
+import com.disciplinequest.app.data.*
+
+object AppDefaults {
+    val shop = listOf(
+        ShopItem("outfit_01","Crimson Operator","Outfit",300),
+        ShopItem("outfit_02","Night Recon","Outfit",500),
+        ShopItem("gear_01","Tactical Vest","Gear",700),
+        ShopItem("gear_02","Urban Pack","Gear",450),
+        ShopItem("bg_01","Red Mountain","Background",250),
+        ShopItem("bg_02","Kyoto Night","Background",400),
+        ShopItem("title_01","Iron Discipline","Title",800),
+        ShopItem("title_02","Never Miss Twice","Title",1000)
+    )
+    val achievements = listOf(
+        Achievement("first","FIRST MISSION","Complete your first task."),
+        Achievement("streak7","7 DAY STREAK","Maintain a 7-day streak."),
+        Achievement("streak30","30 DAY STREAK","Maintain a 30-day streak."),
+        Achievement("tasks100","100 TASKS","Complete 100 tasks."),
+        Achievement("perfect","PERFECT WEEK","Complete every required task for 7 days."),
+        Achievement("comeback","COMEBACK","Recover after a failed task."),
+        Achievement("nomiss","NO MISSES","Complete 20 tasks without a failure."),
+        Achievement("master","DISCIPLINE MASTER","Reach 100 discipline score.")
+    )
+}
+
+==========================================================================================
+FILE: app/src/main/java/com/disciplinequest/app/MainActivity.kt
+==========================================================================================
+package com.disciplinequest.app
+
+import android.Manifest
+import android.app.Activity
+import android.content.Intent
+import android.os.Bundle
+import android.widget.Toast
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.disciplinequest.app.ai.*
+import com.disciplinequest.app.data.*
+import java.time.LocalDate
+import java.time.YearMonth
+import java.time.format.DateTimeFormatter
+import java.time.temporal.ChronoUnit
+import kotlinx.coroutines.launch
+
+private val BG=Color(0xFF050505)
+private val PANEL=Color(0xFF111111)
+private val PANEL2=Color(0xFF181818)
+private val RED=Color(0xFFFF1A1A)
+private val WHITE=Color(0xFFF5F5F5)
+private val MUTED=Color(0xFF9A9A9A)
+private val GREEN=Color(0xFF43D17A)
+private val GOLD=Color(0xFFFFC107)
+
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContent {
+            val vm: MainViewModel = viewModel()
+            DisciplineTheme { App(vm) }
+        }
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 7001)
+        }
+    }
+}
+
+@Composable
+fun DisciplineTheme(content:@Composable()->Unit) {
+    MaterialTheme(
+        colorScheme=darkColorScheme(
+            primary=RED,secondary=RED,background=BG,surface=PANEL,
+            onBackground=WHITE,onSurface=WHITE,onPrimary=Color.White
+        ),
+        content=content
+    )
+}
+
+enum class Screen { HOME,TASKS,CALENDAR,HABITS,PROGRESS,MISSIONS,CHARACTER,SHOP,AI,ACHIEVEMENTS,SETTINGS }
+
+@Composable
+fun App(vm:MainViewModel) {
+    var screen by remember { mutableStateOf(Screen.HOME) }
+    val p by vm.player.collectAsState()
+    val prefs=remember { Prefs(androidx.compose.ui.platform.LocalContext.current) }
+    val labels = if(prefs.language=="my") listOf("ပင်မ","အလုပ်","တိုးတက်မှု","ပို") else listOf("Home","Tasks","Progress","More")
+
+    Scaffold(
+        containerColor=BG,
+        bottomBar={
+            NavigationBar(containerColor=Color(0xFF090909)) {
+                listOf(Screen.HOME,Screen.TASKS,Screen.PROGRESS,Screen.CHARACTER).forEachIndexed { i,s ->
+                    NavigationBarItem(
+                        selected=screen==s,
+                        onClick={screen=s},
+                        icon={Icon(when(s){
+                            Screen.HOME->Icons.Default.Home
+                            Screen.TASKS->Icons.Default.CheckCircle
+                            Screen.PROGRESS->Icons.Default.ShowChart
+                            else->Icons.Default.Person
+                        },null)},
+                        label={Text(labels[i])},
+                        colors=NavigationBarItemDefaults.colors(
+                            selectedIconColor=RED,selectedTextColor=RED,indicatorColor=Color.Transparent,
+                            unselectedIconColor=MUTED,unselectedTextColor=MUTED
+                        )
+                    )
+                }
+            }
+        }
+    ) { pad ->
+        Box(Modifier.padding(pad)) {
+            when(screen) {
+                Screen.HOME->HomeScreen(vm)
+                Screen.TASKS->TasksScreen(vm)
+                Screen.CALENDAR->CalendarScreen(vm)
+                Screen.HABITS->HabitsScreen(vm)
+                Screen.PROGRESS->ProgressScreen(vm)
+                Screen.MISSIONS->MissionsScreen(vm)
+                Screen.CHARACTER->CharacterScreen(vm,onNavigate={screen=it})
+                Screen.SHOP->ShopScreen(vm)
+                Screen.AI->AiScreen(vm,prefs)
+                Screen.ACHIEVEMENTS->AchievementsScreen(vm)
+                Screen.SETTINGS->SettingsScreen(vm,prefs)
+            }
+        }
+    }
+}
+
+@Composable
+fun Header(title:String, subtitle:String?=null, action:(()->Unit)?=null) {
+    Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(title,style=MaterialTheme.typography.headlineSmall,fontWeight=FontWeight.Black)
+            if(subtitle!=null) Text(subtitle,color=MUTED,style=MaterialTheme.typography.bodySmall)
+        }
+        if(action!=null) IconButton(action) { Icon(Icons.Default.Add,null,tint=RED) }
+    }
+}
+
+@Composable
+fun PlayerCard(p:Player) {
+    Card(Modifier.fillMaxWidth(),shape=RoundedCornerShape(22.dp),colors=CardDefaults.cardColors(PANEL)) {
+        Column(Modifier.padding(18.dp)) {
+            Row(verticalAlignment=Alignment.CenterVertically) {
+                Box(Modifier.size(92.dp).background(PANEL2,RoundedCornerShape(18.dp)),contentAlignment=Alignment.Center) {
+                    Icon(Icons.Default.Person,null,tint=RED,modifier=Modifier.size(58.dp))
+                }
+                Spacer(Modifier.width(16.dp))
+                Column {
+                    Text("LEVEL ${p.level}",color=RED,fontWeight=FontWeight.Black)
+                    Text(rank(p.level),style=MaterialTheme.typography.headlineSmall,fontWeight=FontWeight.Black)
+                    Text("STREAK ${p.overallStreak} DAYS",color=MUTED)
+                }
+            }
+            Spacer(Modifier.height(14.dp))
+            Text("HP  ${p.hp}/100",fontWeight=FontWeight.Bold)
+            LinearProgressIndicator({p.hp/100f},Modifier.fillMaxWidth().height(8.dp),color=RED,trackColor=Color(0xFF292929))
+            Spacer(Modifier.height(8.dp))
+            Text("XP  ${p.xp % 100}/100  •  TOTAL ${p.xp}",fontWeight=FontWeight.Bold)
+            LinearProgressIndicator({(p.xp%100)/100f},Modifier.fillMaxWidth().height(8.dp),color=GOLD,trackColor=Color(0xFF292929))
+        }
+    }
+}
+fun rank(level:Int)=when {
+    level>=50->"MASTER"; level>=30->"ELITE"; level>=20->"WARRIOR"; level>=10->"DISCIPLINED"; level>=5->"BEGINNER"; else->"ROOKIE"
+}
+
+@Composable
+fun StatCard(name:String,value:String,modifier:Modifier=Modifier) {
+    Card(modifier,colors=CardDefaults.cardColors(PANEL)) {
+        Column(Modifier.padding(12.dp)) { Text(name,color=MUTED,style=MaterialTheme.typography.labelSmall); Text(value,fontWeight=FontWeight.Black) }
+    }
+}
+
+@Composable
+fun HomeScreen(vm:MainViewModel) {
+    val p by vm.player.collectAsState()
+    val tasks by vm.tasks.collectAsState()
+    val missions by vm.missions.collectAsState()
+    val today=LocalDate.now().toString()
+    val todayTasks=tasks.filter{it.deadline==today && it.type==TaskType.ONE_TIME}
+    val done=todayTasks.count{it.status==TaskStatus.COMPLETED}
+    val percent=if(todayTasks.isEmpty()) 0 else done*100/todayTasks.size
+    LazyColumn(Modifier.fillMaxSize().background(BG),contentPadding=PaddingValues(18.dp),verticalArrangement=Arrangement.spacedBy(14.dp)) {
+        item {
+            Text("DISCIPLINE QUEST",style=MaterialTheme.typography.headlineSmall,fontWeight=FontWeight.Black)
+            Text("LEVEL UP YOUR LIFE",color=RED,fontWeight=FontWeight.Bold)
+        }
+        item{PlayerCard(p)}
+        item{
+            Row(horizontalArrangement=Arrangement.spacedBy(10.dp)) {
+                StatCard("TODAY","$percent%",Modifier.weight(1f))
+                StatCard("COINS","${p.coins}",Modifier.weight(1f))
+                StatCard("SCORE","${p.disciplineScore}",Modifier.weight(1f))
+            }
+        }
+        item{
+            Card(colors=CardDefaults.cardColors(PANEL)) {
+                Column(Modifier.padding(16.dp)) {
+                    Text("TODAY'S MISSION",color=MUTED,fontWeight=FontWeight.Bold)
+                    Text(missions.firstOrNull{!it.completed}?.title ?: "No active mission",fontWeight=FontWeight.Bold)
+                    Text(missions.firstOrNull{!it.completed}?.goal ?: "Create a mission or ask AI Coach.",color=MUTED)
+                }
+            }
+        }
+        item{Text("TODAY'S TASKS",fontWeight=FontWeight.Bold)}
+        if(todayTasks.isEmpty()) item{EmptyCard("No tasks for today. Add one from Tasks.")}
+        items(todayTasks,key={it.id}){TaskRow(it,vm)}
+    }
+}
+
+@Composable
+fun EmptyCard(text:String) {
+    Card(colors=CardDefaults.cardColors(PANEL)) { Text(text,Modifier.padding(18.dp),color=MUTED) }
+}
+
+@Composable
+fun TasksScreen(vm:MainViewModel) {
+    val tasks by vm.tasks.collectAsState()
+    var add by remember{mutableStateOf(false)}
+    var editing by remember{mutableStateOf<Task?>(null)}
+    Scaffold(containerColor=BG,floatingActionButton={FloatingActionButton({add=true},containerColor=RED){Icon(Icons.Default.Add,null)}}){pad->
+        LazyColumn(Modifier.padding(pad).fillMaxSize(),contentPadding=PaddingValues(18.dp),verticalArrangement=Arrangement.spacedBy(10.dp)){
+            item{Header("TASKS","One-time tasks and habits")}
+            if(tasks.isEmpty()) item{EmptyCard("No tasks yet.")}
+            items(tasks,key={it.id}){t->TaskRow(t,vm,{editing=t})}
+        }
+    }
+    if(add) TaskDialog(vm,null){add=false}
+    if(editing!=null) TaskDialog(vm,editing){editing=null}
+}
+
+@Composable
+fun TaskRow(t:Task,vm:MainViewModel,onEdit:(()->Unit)?=null) {
+    Card(Modifier.fillMaxWidth(),colors=CardDefaults.cardColors(PANEL)) {
+        Row(Modifier.padding(12.dp),verticalAlignment=Alignment.CenterVertically) {
+            Checkbox(
+                checked=t.status==TaskStatus.COMPLETED||t.status==TaskStatus.RECOVERED,
+                onCheckedChange={if(it)vm.complete(t)},
+                colors=CheckboxDefaults.colors(checkedColor=RED)
+            )
+            Column(Modifier.weight(1f)) {
+                Text(t.title,fontWeight=FontWeight.Bold)
+                Text("${t.deadline} • ${t.difficulty} • ${t.status}",color=if(t.status==TaskStatus.FAILED)RED else MUTED,style=MaterialTheme.typography.bodySmall)
+                Text("+${t.xp} XP  +${t.coins} C  -${t.hpPenalty} HP",color=MUTED,style=MaterialTheme.typography.bodySmall)
+            }
+            when(t.status){
+                TaskStatus.PENDING->IconButton({vm.fail(t)}){Icon(Icons.Default.Warning,null,tint=RED)}
+                TaskStatus.FAILED->IconButton({vm.recover(t)}){Icon(Icons.Default.Restore,null,tint=GREEN)}
+                else->Icon(Icons.Default.CheckCircle,null,tint=GREEN)
+            }
+            if(onEdit!=null)IconButton(onEdit){Icon(Icons.Default.Edit,null,tint=MUTED)}
+            IconButton({vm.deleteTask(t)}){Icon(Icons.Default.Delete,null,tint=MUTED)}
+        }
+    }
+}
+
+@Composable
+fun TaskDialog(vm:MainViewModel,existing:Task?,close:()->Unit) {
+    var title by remember{mutableStateOf(existing?.title?:"")}
+    var desc by remember{mutableStateOf(existing?.description?:"")}
+    var date by remember{mutableStateOf(existing?.deadline?:LocalDate.now().toString())}
+    var diff by remember{mutableStateOf(existing?.difficulty?:Difficulty.MEDIUM)}
+    var type by remember{mutableStateOf(existing?.type?:TaskType.ONE_TIME)}
+    AlertDialog(onDismissRequest=close,title={Text(if(existing==null)"NEW TASK" else "EDIT TASK")},text={
+        Column(verticalArrangement=Arrangement.spacedBy(8.dp)){
+            OutlinedTextField(title,{title=it},label={Text("Title")},singleLine=true)
+            OutlinedTextField(desc,{desc=it},label={Text("Description")})
+            OutlinedTextField(date,{date=it},label={Text("Deadline YYYY-MM-DD")},singleLine=true)
+            Row(horizontalArrangement=Arrangement.spacedBy(5.dp)){Difficulty.values().forEach{d->FilterChip(diff==d,{diff=d},label={Text(d.name.take(1))})}}
+            Row(horizontalArrangement=Arrangement.spacedBy(5.dp)){FilterChip(type==TaskType.ONE_TIME,{type=TaskType.ONE_TIME},label={Text("One-time")});FilterChip(type==TaskType.HABIT,{type=TaskType.HABIT},label={Text("Habit")})}
+        }
+    },confirmButton={Button({if(existing==null)vm.addTask(title,desc,date,diff,type)else vm.editTask(existing,title,desc,date,diff);close()},colors=ButtonDefaults.buttonColors(RED)){Text("SAVE")}},dismissButton={TextButton(close){Text("CANCEL")}})
+}
+
+@Composable
+fun CalendarScreen(vm:MainViewModel) {
+    val tasks by vm.tasks.collectAsState()
+    var month by remember{mutableStateOf(YearMonth.now())}
+    var selected by remember{mutableStateOf(LocalDate.now())}
+    val first=month.atDay(1)
+    val days=first.dayOfWeek.value%7
+    val cells=(0 until days).map{null}+(1..month.lengthOfMonth()).map{month.atDay(it)}
+    LazyColumn(Modifier.fillMaxSize().background(BG),contentPadding=PaddingValues(18.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
+        item{
+            Row(verticalAlignment=Alignment.CenterVertically){
+                IconButton({month=month.minusMonths(1)}){Icon(Icons.Default.ChevronLeft,null)}
+                Text(month.format(DateTimeFormatter.ofPattern("MMMM yyyy")),Modifier.weight(1f),fontWeight=FontWeight.Black)
+                IconButton({month=month.plusMonths(1)}){Icon(Icons.Default.ChevronRight,null)}
+            }
+            Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceAround){listOf("S","M","T","W","T","F","S").forEach{Text(it,color=MUTED)}} 
+        }
+        item{
+            LazyVerticalGrid(columns=GridCells.Fixed(7),modifier=Modifier.height(310.dp),userScrollEnabled=false){
+                items(cells){d->
+                    if(d==null)Box(Modifier.padding(3.dp).aspectRatio(1f))
+                    else{
+                        val count=tasks.count{it.deadline==d.toString()}
+                        val isSelected=d==selected
+                        Box(Modifier.padding(3.dp).aspectRatio(1f).background(if(isSelected)RED else PANEL,RoundedCornerShape(10.dp)).clickable{selected=d},contentAlignment=Alignment.Center){
+                            Column(horizontalAlignment=Alignment.CenterHorizontally){
+                                Text("${d.dayOfMonth}",fontWeight=FontWeight.Bold)
+                                if(count>0)Text("•",color=if(tasks.any{it.deadline==d.toString()&&it.status==TaskStatus.FAILED})RED else GREEN)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        item{Text("SELECTED: $selected",fontWeight=FontWeight.Bold)}
+        items(tasks.filter{it.deadline==selected.toString()},key={it.id}){TaskRow(it,vm)}
+    }
+}
+
+@Composable
+fun HabitsScreen(vm:MainViewModel) {
+    val habits by vm.habits.collectAsState()
+    var add by remember{mutableStateOf(false)}
+    Scaffold(containerColor=BG,floatingActionButton={FloatingActionButton({add=true},containerColor=RED){Icon(Icons.Default.Add,null)}}){pad->
+        LazyColumn(Modifier.padding(pad).fillMaxSize(),contentPadding=PaddingValues(18.dp),verticalArrangement=Arrangement.spacedBy(10.dp)){
+            item{Header("HABITS","Daily consistency and streaks")}
+            if(habits.isEmpty())item{EmptyCard("No habits yet.")}
+            items(habits,key={it.id}){h->
+                Card(colors=CardDefaults.cardColors(PANEL)){Column(Modifier.padding(16.dp)){
+                    Row(verticalAlignment=Alignment.CenterVertically){
+                        Column(Modifier.weight(1f)){Text(h.name,fontWeight=FontWeight.Bold);Text("${h.frequency} • ${h.currentStreak} day streak • best ${h.bestStreak}",color=MUTED)}
+                        Button({vm.completeHabit(h)},colors=ButtonDefaults.buttonColors(RED)){Text("DONE")}
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text("${h.completionCount} completions  •  +${h.xp} XP  •  -${h.hpPenalty} HP",color=MUTED)
+                    TextButton({vm.deleteHabit(h)}){Text("DELETE",color=MUTED)}
+                }}
+            }
+        }
+    }
+    if(add)HabitDialog(vm){add=false}
+}
+
+@Composable
+fun HabitDialog(vm:MainViewModel,close:()->Unit){
+    var name by remember{mutableStateOf("")};var freq by remember{mutableStateOf("DAILY")};var diff by remember{mutableStateOf(Difficulty.MEDIUM)}
+    AlertDialog(onDismissRequest=close,title={Text("NEW HABIT")},text={Column(verticalArrangement=Arrangement.spacedBy(8.dp)){
+        OutlinedTextField(name,{name=it},label={Text("Habit name")})
+        OutlinedTextField(freq,{freq=it},label={Text("Frequency")})
+        Row{Difficulty.values().forEach{d->FilterChip(diff==d,{diff=d},label={Text(d.name.take(1))})}}
+    }},confirmButton={Button({vm.addHabit(name,freq,diff);close()},colors=ButtonDefaults.buttonColors(RED)){Text("CREATE")}},dismissButton={TextButton(close){Text("CANCEL")}})
+}
+
+@Composable
+fun ProgressScreen(vm:MainViewModel) {
+    val p by vm.player.collectAsState();val tasks by vm.tasks.collectAsState();val daily by vm.daily.collectAsState()
+    val completed=tasks.count{it.status==TaskStatus.COMPLETED};val failed=tasks.count{it.status==TaskStatus.FAILED};val recovered=tasks.count{it.status==TaskStatus.RECOVERED}
+    val completion=if(tasks.isEmpty())0 else completed*100/tasks.size
+    LazyColumn(Modifier.fillMaxSize().background(BG),contentPadding=PaddingValues(18.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
+        item{Header("PROGRESS","Daily • Weekly • Monthly • Yearly")}
+        item{ScoreCard("DISCIPLINE SCORE",p.disciplineScore)}
+        item{ScoreCard("TASK COMPLETION",completion)}
+        item{ScoreCard("STREAK POWER",minOf(100,p.overallStreak*10))}
+        item{Row(horizontalArrangement=Arrangement.spacedBy(10.dp)){StatCard("DONE","$completed",Modifier.weight(1f));StatCard("FAILED","$failed",Modifier.weight(1f));StatCard("RECOVERED","$recovered",Modifier.weight(1f))}}
+        item{
+            Card(colors=CardDefaults.cardColors(PANEL)){Column(Modifier.padding(16.dp)){
+                Text("HISTORY",fontWeight=FontWeight.Bold)
+                daily.take(14).forEach{r->Row(Modifier.fillMaxWidth().padding(vertical=4.dp),horizontalArrangement=Arrangement.SpaceBetween){
+                    Text(r.date,color=MUTED);Text("+${r.xpEarned} XP");Text("✓${r.completed}  ✕${r.failed}",color=MUTED)
+                }}
+            }}
+        }
+        item{Text("Yearly view is calculated from saved daily records; all data remains local.",color=MUTED,style=MaterialTheme.typography.bodySmall)}
+    }
+}
+@Composable fun ScoreCard(title:String,value:Int){Card(colors=CardDefaults.cardColors(PANEL)){Column(Modifier.padding(16.dp)){Text(title,color=MUTED,fontWeight=FontWeight.Bold);Text("$value / 100",style=MaterialTheme.typography.headlineMedium,fontWeight=FontWeight.Black);LinearProgressIndicator({value/100f},Modifier.fillMaxWidth().height(8.dp),color=RED,trackColor=Color(0xFF292929))}}}
+
+@Composable
+fun MissionsScreen(vm:MainViewModel){
+    val missions by vm.missions.collectAsState();val tasks by vm.tasks.collectAsState();var add by remember{mutableStateOf(false)}
+    Scaffold(containerColor=BG,floatingActionButton={FloatingActionButton({add=true},containerColor=RED){Icon(Icons.Default.Add,null)}}){pad->
+        LazyColumn(Modifier.padding(pad).fillMaxSize(),contentPadding=PaddingValues(18.dp),verticalArrangement=Arrangement.spacedBy(10.dp)){
+            item{Header("MISSIONS","Long-term goals")}
+            items(missions,key={it.id}){m->
+                val done=tasks.count{it.missionId==m.id&&it.status==TaskStatus.COMPLETED}
+                val pct=if(m.targetCount==0)0 else (done*100/m.targetCount).coerceAtMost(100)
+                Card(colors=CardDefaults.cardColors(PANEL)){Column(Modifier.padding(16.dp)){
+                    Text(m.title,fontWeight=FontWeight.Black);Text(m.goal,color=MUTED)
+                    Spacer(Modifier.height(8.dp));Text("$done / ${m.targetCount} tasks")
+                    LinearProgressIndicator({pct/100f},Modifier.fillMaxWidth().height(8.dp),color=RED,trackColor=Color(0xFF292929))
+                    Text("Deadline ${m.deadline} • Reward ${m.rewardXp} XP / ${m.rewardCoins} coins",color=MUTED,style=MaterialTheme.typography.bodySmall)
+                    TextButton({vm.deleteMission(m)}){Text("DELETE",color=MUTED)}
+                }}
+            }
+        }
+    }
+    if(add)MissionDialog(vm){add=false}
+}
+@Composable fun MissionDialog(vm:MainViewModel,close:()->Unit){
+    var title by remember{mutableStateOf("")};var goal by remember{mutableStateOf("")};var start by remember{mutableStateOf(LocalDate.now().toString())}
+    var deadline by remember{mutableStateOf(LocalDate.now().plusDays(30).toString())};var target by remember{mutableStateOf("30")}
+    AlertDialog(onDismissRequest=close,title={Text("NEW MISSION")},text={Column(verticalArrangement=Arrangement.spacedBy(8.dp)){
+        OutlinedTextField(title,{title=it},label={Text("Title")});OutlinedTextField(goal,{goal=it},label={Text("Goal")})
+        OutlinedTextField(start,{start=it},label={Text("Start YYYY-MM-DD")});OutlinedTextField(deadline,{deadline=it},label={Text("Deadline YYYY-MM-DD")})
+        OutlinedTextField(target,{target=it},label={Text("Target task count")})
+    }},confirmButton={Button({vm.addMission(title,goal,start,deadline,target.toIntOrNull()?:30,200,100);close()},colors=ButtonDefaults.buttonColors(RED)){Text("CREATE")}},dismissButton={TextButton(close){Text("CANCEL")}})
+}
+
+@Composable
+fun CharacterScreen(vm:MainViewModel,onNavigate:(Screen)->Unit){
+    val p by vm.player.collectAsState();var more by remember{mutableStateOf(false)}
+    LazyColumn(Modifier.fillMaxSize().background(BG),contentPadding=PaddingValues(18.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
+        item{Header("CHARACTER","Your real-life RPG profile")}
+        item{PlayerCard(p)}
+        item{Row(horizontalArrangement=Arrangement.spacedBy(10.dp)){StatCard("COMPLETED","${p.completed}",Modifier.weight(1f));StatCard("FAILED","${p.failed}",Modifier.weight(1f));StatCard("RECOVERED","${p.recovered}",Modifier.weight(1f))}}
+        item{
+            val shop by vm.shop.collectAsState()
+            val equipped=shop.filter{it.equipped}
+            Card(colors=CardDefaults.cardColors(PANEL)){Column(Modifier.padding(16.dp)){
+                Text("EQUIPPED LOADOUT",fontWeight=FontWeight.Bold)
+                Text(if(equipped.isEmpty())"Default Operator" else equipped.joinToString(" • "){it.name},color=MUTED)
+            }}
+        }
+        item{Button({more=true},Modifier.fillMaxWidth(),colors=ButtonDefaults.buttonColors(RED)){Text("OPEN CHARACTER HUB")}}
+        item{if(more)MoreHub(onNavigate={s->more=false;onNavigate(s)})}
+    }
+}
+
+@Composable
+fun MoreHub(onNavigate:(Screen)->Unit){
+    Column(verticalArrangement=Arrangement.spacedBy(8.dp)){
+        listOf(Screen.CALENDAR to "Calendar",Screen.HABITS to "Habits",Screen.MISSIONS to "Missions",Screen.SHOP to "Shop",Screen.ACHIEVEMENTS to "Achievements",Screen.AI to "AI Coach",Screen.SETTINGS to "Settings").forEach{(s,n)->
+            OutlinedButton({onNavigate(s)},Modifier.fillMaxWidth()){Text(n)}
+        }
+    }
+}
+
+@Composable
+fun ShopScreen(vm:MainViewModel){
+    val items by vm.shop.collectAsState();val p by vm.player.collectAsState()
+    LazyColumn(Modifier.fillMaxSize().background(BG),contentPadding=PaddingValues(18.dp),verticalArrangement=Arrangement.spacedBy(10.dp)){
+        item{Header("SHOP","Cosmetics only • ${p.coins} coins")}
+        items(items,key={it.id}){i->
+            Card(colors=CardDefaults.cardColors(PANEL)){Row(Modifier.padding(14.dp),verticalAlignment=Alignment.CenterVertically){
+                Column(Modifier.weight(1f)){Text(i.name,fontWeight=FontWeight.Bold);Text("${i.category} • ${i.price} coins",color=MUTED)}
+                if(!i.owned)Button({vm.purchase(i)},colors=ButtonDefaults.buttonColors(RED)){Text("BUY")}
+                else if(i.equipped)Text("EQUIPPED",color=GREEN,fontWeight=FontWeight.Bold)
+                else OutlinedButton({vm.equip(i)}){Text("EQUIP")}
+            }}
+        }
+    }
+}
+
+@Composable
+fun AchievementsScreen(vm:MainViewModel){
+    val a by vm.achievements.collectAsState()
+    LazyColumn(Modifier.fillMaxSize().background(BG),contentPadding=PaddingValues(18.dp),verticalArrangement=Arrangement.spacedBy(10.dp)){
+        item{Header("ACHIEVEMENTS","Milestones")}
+        items(a,key={it.id}){x->Card(colors=CardDefaults.cardColors(if(x.unlocked)PANEL else Color(0xFF0B0B0B))){Row(Modifier.padding(16.dp),verticalAlignment=Alignment.CenterVertically){
+            Icon(if(x.unlocked)Icons.Default.EmojiEvents else Icons.Default.Lock,null,tint=if(x.unlocked)GOLD:MUTED,modifier=Modifier.size(36.dp))
+            Spacer(Modifier.width(12.dp));Column{Text(x.title,fontWeight=FontWeight.Bold);Text(x.description,color=MUTED)}}
+        }}
+    }
+}
+
+@Composable
+fun AiScreen(vm:MainViewModel,prefs:Prefs){
+    val context=androidx.compose.ui.platform.LocalContext.current
+    var key by remember{mutableStateOf(prefs.geminiKey)}
+    var goal by remember{mutableStateOf("")};var days by remember{mutableStateOf("30")}
+    var loading by remember{mutableStateOf(false)};var error by remember{mutableStateOf<String?>(null)}
+    var draft by remember{mutableStateOf<AiPlanDraft?>(null)}
+    val coach=remember{GeminiCoach()}
+    LazyColumn(Modifier.fillMaxSize().background(BG),contentPadding=PaddingValues(18.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
+        item{Header("AI COACH","Free-tier Gemini • preview before saving")}
+        item{
+            Card(colors=CardDefaults.cardColors(PANEL)){Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){
+                Text("GEMINI API KEY",fontWeight=FontWeight.Bold)
+                OutlinedTextField(key,{key=it},label={Text("Free-tier API key")},visualTransformation=PasswordVisualTransformation())
+                Text("No paid billing is required for a free-tier project. Never paste a paid key.",color=MUTED,style=MaterialTheme.typography.bodySmall)
+                Button({prefs.geminiKey=key;coach.setKey(key);Toast.makeText(context,"Saved",Toast.LENGTH_SHORT).show()},colors=ButtonDefaults.buttonColors(RED)){Text("SAVE KEY")}
+            }}
+        }
+        item{
+            Card(colors=CardDefaults.cardColors(PANEL)){Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){
+                OutlinedTextField(goal,{goal=it},label={Text("Your goal")})
+                OutlinedTextField(days,{days=it},label={Text("Days")},singleLine=true)
+                Button({
+                    loading=true;error=null;coach.setKey(key)
+                    coach.generate(goal,days.toIntOrNull()?:30){result->
+                        loading=false
+                        result.onSuccess{draft=it}.onFailure{error=it.message}
+                    }
+                },enabled=!loading&&goal.isNotBlank()&&key.isNotBlank(),colors=ButtonDefaults.buttonColors(RED)){Text(if(loading)"GENERATING..." else "GENERATE PLAN")}
+                error?.let{Text("AI error: $it",color=RED)}
+            }}
+        }
+        draft?.let{plan->
+            item{AiPreview(plan,onChange={draft=it},onAccept={vm.acceptAiPlan(it);draft=null;Toast.makeText(context,"Mission saved",Toast.LENGTH_SHORT).show()})}
+        }
+    }
+}
+
+
+@Composable
+fun AiPreview(plan:AiPlanDraft,onChange:(AiPlanDraft)->Unit,onAccept:(AiPlanDraft)->Unit){
+    Card(colors=CardDefaults.cardColors(PANEL)){
+        Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){
+            Text("PREVIEW — EDIT BEFORE SAVE",color=RED,fontWeight=FontWeight.Black)
+            var missionTitle by remember(plan){mutableStateOf(plan.missionTitle)}
+            var goal by remember(plan){mutableStateOf(plan.goal)}
+            OutlinedTextField(missionTitle,{v->missionTitle=v;onChange(plan.copy(missionTitle=v))},label={Text("Mission title")})
+            OutlinedTextField(goal,{v->goal=v;onChange(plan.copy(goal=v))},label={Text("Goal")})
+            plan.tasks.forEachIndexed{index,t->
+                var title by remember(plan,index){mutableStateOf(t.title)}
+                var desc by remember(plan,index){mutableStateOf(t.description)}
+                var date by remember(plan,index){mutableStateOf(t.deadline)}
+                var xp by remember(plan,index){mutableStateOf(t.xp.toString())}
+                var coins by remember(plan,index){mutableStateOf(t.coins.toString())}
+                var hp by remember(plan,index){mutableStateOf(t.hpPenalty.toString())}
+                var diff by remember(plan,index){mutableStateOf(runCatching{Difficulty.valueOf(t.difficulty.uppercase())}.getOrDefault(Difficulty.MEDIUM))}
+                Card(colors=CardDefaults.cardColors(PANEL2)){
+                    Column(Modifier.padding(10.dp),verticalArrangement=Arrangement.spacedBy(6.dp)){
+                        Text("TASK ${index+1}",color=RED,fontWeight=FontWeight.Bold)
+                        OutlinedTextField(title,{v->title=v;val n=plan.tasks.toMutableList();n[index]=t.copy(title=v);onChange(plan.copy(tasks=n))},label={Text("Title")})
+                        OutlinedTextField(desc,{v->desc=v;val n=plan.tasks.toMutableList();n[index]=t.copy(description=v);onChange(plan.copy(tasks=n))},label={Text("Description")})
+                        OutlinedTextField(date,{v->date=v;val n=plan.tasks.toMutableList();n[index]=t.copy(deadline=v);onChange(plan.copy(tasks=n))},label={Text("Deadline YYYY-MM-DD")})
+                        Row(horizontalArrangement=Arrangement.spacedBy(4.dp)){
+                            Difficulty.values().forEach{d->
+                                FilterChip(diff==d,{diff=d;val n=plan.tasks.toMutableList();n[index]=t.copy(difficulty=d.name);onChange(plan.copy(tasks=n))},label={Text(d.name.take(1))})
+                            }
+                        }
+                        Row(horizontalArrangement=Arrangement.spacedBy(6.dp)){
+                            OutlinedTextField(xp,{v->xp=v;val n=plan.tasks.toMutableList();n[index]=t.copy(xp=v.toIntOrNull()?:t.xp);onChange(plan.copy(tasks=n))},label={Text("XP")},modifier=Modifier.weight(1f),singleLine=true)
+                            OutlinedTextField(coins,{v->coins=v;val n=plan.tasks.toMutableList();n[index]=t.copy(coins=v.toIntOrNull()?:t.coins);onChange(plan.copy(tasks=n))},label={Text("Coins")},modifier=Modifier.weight(1f),singleLine=true)
+                            OutlinedTextField(hp,{v->hp=v;val n=plan.tasks.toMutableList();n[index]=t.copy(hpPenalty=v.toIntOrNull()?:t.hpPenalty);onChange(plan.copy(tasks=n))},label={Text("HP")},modifier=Modifier.weight(1f),singleLine=true)
+                        }
+                        TextButton({
+                            val n=plan.tasks.toMutableList();n.removeAt(index);onChange(plan.copy(tasks=n))
+                        }){Text("DELETE TASK",color=RED)}
+                    }
+                }
+            }
+            Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){
+                Button({onAccept(plan)},colors=ButtonDefaults.buttonColors(RED)){Text("ACCEPT & SAVE")}
+                OutlinedButton({onChange(plan.copy(tasks=emptyList()))}){Text("REJECT")}
+            }
+        }
+    }
+}
+
+@Composable
+fun SettingsScreen(vm:MainViewModel,prefs:Prefs){
+    val context=androidx.compose.ui.platform.LocalContext.current
+    val create=rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")){uri->
+        if(uri!=null){context.contentResolver.openOutputStream(uri)?.use{it.write(vm.exportJson().toByteArray())};Toast.makeText(context,"Exported",Toast.LENGTH_SHORT).show()}
+    }
+    val open=rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()){uri->
+        if(uri!=null){val json=context.contentResolver.openInputStream(uri)?.bufferedReader()?.readText();if(json!=null)vm.importJson(json);Toast.makeText(context,"Imported",Toast.LENGTH_SHORT).show()}
+    }
+    var notify by remember{mutableStateOf(prefs.notifications)}
+    var my by remember{mutableStateOf(prefs.language=="my")}
+    var confirmReset by remember{mutableStateOf(false)}
+    LazyColumn(Modifier.fillMaxSize().background(BG),contentPadding=PaddingValues(18.dp),verticalArrangement=Arrangement.spacedBy(10.dp)){
+        item{Header("SETTINGS","Personalize the system")}
+        item{Card(colors=CardDefaults.cardColors(PANEL)){Column(Modifier.padding(16.dp)){
+            Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically){Text("Burmese UI",Modifier.weight(1f));Switch(my,{my=it;prefs.language=if(it)"my" else "en"})}
+            Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically){Text("Notifications",Modifier.weight(1f));Switch(notify,{notify=it;prefs.notifications=it;if(it)ReminderScheduler.schedule(context)else ReminderScheduler.cancel(context)})}
+        }}}
+        item{Button({create.launch("discipline_quest_backup.json")},Modifier.fillMaxWidth(),colors=ButtonDefaults.buttonColors(RED)){Text("EXPORT DATA")}}
+        item{OutlinedButton({open.launch(arrayOf("application/json"))},Modifier.fillMaxWidth()){Text("IMPORT DATA")}}
+        item{OutlinedButton({confirmReset=true},Modifier.fillMaxWidth()){Text("RESET ALL DATA",color=RED)}}
+        item{Card(colors=CardDefaults.cardColors(PANEL)){Column(Modifier.padding(16.dp)){Text("ABOUT",fontWeight=FontWeight.Bold);Text("Discipline Quest v1.0.0",color=MUTED);Text("Offline-first personal discipline RPG. No ads. No subscriptions. AI is optional.",color=MUTED)}}}
+    }
+    if(confirmReset)AlertDialog(onDismissRequest={confirmReset=false},title={Text("RESET EVERYTHING?")},text={Text("All tasks, missions, habits and progress will be deleted.")},confirmButton={Button({vm.resetAll();confirmReset=false},colors=ButtonDefaults.buttonColors(RED)){Text("RESET")}},dismissButton={TextButton({confirmReset=false}){Text("CANCEL")}})
+}
+
+==========================================================================================
+FILE: app/src/main/java/com/disciplinequest/app/MainViewModel.kt
+==========================================================================================
+package com.disciplinequest.app
+
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import com.disciplinequest.app.ai.AiPlanDraft
+import com.disciplinequest.app.data.*
+import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.launch
+import java.time.LocalDate
+import java.time.temporal.ChronoUnit
+
+class MainViewModel(app: Application) : AndroidViewModel(app) {
+    private val db = AppDatabase.get(app)
+    private val tasksDao = db.taskDao()
+    private val missionDao = db.missionDao()
+    private val habitDao = db.habitDao()
+    private val playerDao = db.playerDao()
+    private val shopDao = db.shopDao()
+    private val achievementDao = db.achievementDao()
+    private val dailyDao = db.dailyDao()
+
+    val tasks = tasksDao.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val missions = missionDao.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val habits = habitDao.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val player = playerDao.observe().filterNotNull().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), Player())
+    val shop = shopDao.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val achievements = achievementDao.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val daily = dailyDao.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    init {
+        viewModelScope.launch {
+            if (playerDao.observe().firstOrNull() == null) playerDao.save(Player())
+            if (shop.firstOrNull().isNullOrEmpty()) shopDao.insertAll(AppDefaults.shop)
+            if (achievements.firstOrNull().isNullOrEmpty()) achievementDao.insertAll(AppDefaults.achievements)
+            refreshFailedOverdue()
+        }
+    }
+
+    private suspend fun refreshFailedOverdue() {
+        val today = LocalDate.now().toString()
+        tasks.value.filter { it.status == TaskStatus.PENDING && it.deadline < today }.forEach { fail(it) }
+    }
+
+    fun addTask(title: String, description: String, deadline: String, difficulty: Difficulty, type: TaskType, missionId: Long? = null) {
+        if (title.isBlank()) return
+        val xp = when (difficulty) { Difficulty.EASY -> 10; Difficulty.MEDIUM -> 20; Difficulty.HARD -> 50; Difficulty.CRITICAL -> 75 }
+        val hp = when (difficulty) { Difficulty.EASY -> 5; Difficulty.MEDIUM -> 10; Difficulty.HARD -> 20; Difficulty.CRITICAL -> 30 }
+        viewModelScope.launch {
+            tasksDao.insert(Task(title=title.trim(),description=description,deadline=deadline.ifBlank{LocalDate.now().toString()},
+                difficulty=difficulty,type=type,xp=xp,coins=xp/2,hpPenalty=hp,missionId=missionId))
+        }
+    }
+
+    fun addHabit(name: String, frequency: String, difficulty: Difficulty) {
+        if (name.isBlank()) return
+        val xp = when (difficulty) { Difficulty.EASY -> 10; Difficulty.MEDIUM -> 20; Difficulty.HARD -> 50; Difficulty.CRITICAL -> 75 }
+        val hp = when (difficulty) { Difficulty.EASY -> 5; Difficulty.MEDIUM -> 10; Difficulty.HARD -> 20; Difficulty.CRITICAL -> 30 }
+        viewModelScope.launch { habitDao.insert(Habit(name=name.trim(),frequency=frequency,xp=xp,coins=xp/2,hpPenalty=hp)) }
+    }
+
+    fun addMission(title: String, goal: String, start: String, deadline: String, target: Int, xp: Int, coins: Int) {
+        if (title.isBlank()) return
+        viewModelScope.launch { missionDao.insert(Mission(title=title.trim(),goal=goal,startDate=start,deadline=deadline,targetCount=target,rewardXp=xp,rewardCoins=coins)) }
+    }
+
+    fun complete(task: Task) {
+        if (task.status != TaskStatus.PENDING) return
+        viewModelScope.launch {
+            tasksDao.update(task.copy(status=TaskStatus.COMPLETED))
+            val p = player.value
+            val newXp = p.xp + task.xp
+            val newLevel = 1 + newXp / 100
+            val newCoins = p.coins + task.coins
+            val streak = if (p.lastActiveDate == LocalDate.now().minusDays(1).toString()) p.overallStreak + 1 else 1
+            val np = p.copy(xp=newXp,level=newLevel,coins=newCoins,completed=p.completed+1,
+                overallStreak=streak,bestStreak=maxOf(p.bestStreak,streak),lastActiveDate=LocalDate.now().toString())
+            playerDao.save(recalc(np))
+            saveDaily(task.deadline, xp=task.xp, coins=task.coins, completedDelta=1)
+            checkAchievements()
+            updateMission(task.missionId)
+        }
+    }
+
+    fun fail(task: Task) {
+        if (task.status != TaskStatus.PENDING) return
+        viewModelScope.launch {
+            tasksDao.update(task.copy(status=TaskStatus.FAILED))
+            val p=player.value
+            val np=p.copy(xp=maxOf(0,p.xp-task.hpPenalty),hp=maxOf(0,p.hp-task.hpPenalty),
+                failed=p.failed+1,overallStreak=0,disciplineScore=0)
+            playerDao.save(recalc(np))
+            saveDaily(task.deadline,hp=np.hp,failedDelta=1)
+            checkAchievements()
+        }
+    }
+
+    fun recover(task: Task) {
+        if (task.status != TaskStatus.FAILED) return
+        viewModelScope.launch {
+            tasksDao.update(task.copy(status=TaskStatus.RECOVERED))
+            val p=player.value
+            val np=p.copy(hp=minOf(100,p.hp+task.hpPenalty),recovered=p.recovered+1)
+            playerDao.save(recalc(np))
+            saveDaily(task.deadline,hp=np.hp,recoveredDelta=1)
+            checkAchievements()
+        }
+    }
+
+
+    fun completeHabit(habit: Habit) {
+        viewModelScope.launch {
+            val today = LocalDate.now().toString()
+            val existing = tasks.value.firstOrNull { it.habitKey == "habit_${habit.id}_$today" && it.status == TaskStatus.COMPLETED }
+            if (existing != null) return@launch
+            val streak = habit.currentStreak + 1
+            habitDao.update(habit.copy(currentStreak=streak,bestStreak=maxOf(habit.bestStreak,streak),completionCount=habit.completionCount+1))
+            val p=player.value
+            val newXp=p.xp+habit.xp
+            val newStreak=if(p.lastActiveDate==LocalDate.now().minusDays(1).toString()) p.overallStreak+1 else 1
+            playerDao.save(recalc(p.copy(xp=newXp,level=1+newXp/100,coins=p.coins+habit.coins,completed=p.completed+1,
+                overallStreak=newStreak,bestStreak=maxOf(p.bestStreak,newStreak),lastActiveDate=today)))
+            tasksDao.insert(Task(title=habit.name,description="Habit completion",type=TaskType.HABIT,category="Habit",
+                difficulty=Difficulty.EASY,deadline=today,xp=habit.xp,coins=habit.coins,hpPenalty=habit.hpPenalty,
+                status=TaskStatus.COMPLETED,habitKey="habit_${habit.id}_$today"))
+            saveDaily(today,hp=player.value.hp,completedDelta=1,xp=habit.xp,coins=habit.coins)
+            checkAchievements()
+        }
+    }
+
+    fun updateHabit(habit: Habit, name: String, frequency: String) {
+        viewModelScope.launch { habitDao.update(habit.copy(name=name,frequency=frequency)) }
+    }
+
+    fun deleteTask(t: Task) = viewModelScope.launch { tasksDao.delete(t) }
+    fun deleteMission(m: Mission) = viewModelScope.launch { missionDao.delete(m) }
+    fun deleteHabit(h: Habit) = viewModelScope.launch { habitDao.delete(h) }
+
+    fun purchase(item: ShopItem) {
+        viewModelScope.launch {
+            val p=player.value
+            if (!item.owned && p.coins >= item.price) {
+                playerDao.save(p.copy(coins=p.coins-item.price))
+                shopDao.update(item.copy(owned=true))
+            }
+        }
+    }
+    fun equip(item: ShopItem) {
+        viewModelScope.launch {
+            if (!item.owned) return@launch
+            shopDao.unequipCategory(item.category)
+            shopDao.update(item.copy(equipped=true))
+        }
+    }
+
+    fun editTask(task: Task, title: String, desc: String, date: String, difficulty: Difficulty) {
+        val xp=when(difficulty){Difficulty.EASY->10;Difficulty.MEDIUM->20;Difficulty.HARD->50;Difficulty.CRITICAL->75}
+        val hp=when(difficulty){Difficulty.EASY->5;Difficulty.MEDIUM->10;Difficulty.HARD->20;Difficulty.CRITICAL->30}
+        viewModelScope.launch { tasksDao.update(task.copy(title=title,description=desc,deadline=date,difficulty=difficulty,xp=xp,coins=xp/2,hpPenalty=hp)) }
+    }
+
+    fun acceptAiPlan(plan: AiPlanDraft) {
+        viewModelScope.launch {
+            val start=LocalDate.now()
+            val deadline=start.plusDays((plan.tasks.size-1).coerceAtLeast(0).toLong()).toString()
+            val missionId=missionDao.insert(Mission(title=plan.missionTitle,goal=plan.goal,startDate=start.toString(),deadline=deadline,
+                targetCount=plan.tasks.size,rewardXp=plan.tasks.sumOf{it.xp},rewardCoins=plan.tasks.sumOf{it.coins}))
+            plan.tasks.forEach { t ->
+                val d=runCatching{Difficulty.valueOf(t.difficulty.uppercase())}.getOrDefault(Difficulty.MEDIUM)
+                tasksDao.insert(Task(title=t.title,description=t.description,deadline=t.deadline, difficulty=d,xp=t.xp,coins=t.coins,hpPenalty=t.hpPenalty,missionId=missionId))
+            }
+        }
+    }
+
+    private suspend fun updateMission(id: Long?) {
+        if (id == null) return
+        val m=missions.value.firstOrNull{it.id==id} ?: return
+        val count=tasks.value.count{it.missionId==id && it.status==TaskStatus.COMPLETED}+1
+        if (!m.completed && count >= m.targetCount) {
+            missionDao.update(m.copy(completed=true))
+            val p=player.value
+            playerDao.save(recalc(p.copy(xp=p.xp+m.rewardXp,coins=p.coins+m.rewardCoins)))
+        }
+    }
+
+    private suspend fun saveDaily(date:String,hp:Int?=null,completedDelta:Int=0,failedDelta:Int=0,recoveredDelta:Int=0,xp:Int=0,coins:Int=0) {
+        val old=daily.value.firstOrNull{it.date==date} ?: DailyRecord(date=date)
+        dailyDao.save(old.copy(completed=old.completed+completedDelta,failed=old.failed+failedDelta,recovered=old.recovered+recoveredDelta,
+            xpEarned=old.xpEarned+xp,coinsEarned=old.coinsEarned+coins,hpAtEnd=hp?:player.value.hp))
+    }
+
+    private fun recalc(p:Player):Player {
+        val total=p.completed+p.failed
+        val completion=if(total==0)0.0 else p.completed.toDouble()/total
+        val consistency=minOf(1.0,p.overallStreak/30.0)
+        val recovery=minOf(1.0,p.recovered/10.0)
+        val score=(completion*60+consistency*30+recovery*10).coerceIn(0.0,100.0).toInt()
+        return p.copy(disciplineScore=score)
+    }
+
+    private suspend fun checkAchievements() {
+        val p=player.value
+        val a=achievements.value
+        fun unlock(id:String): Achievement?=a.firstOrNull{it.id==id && !it.unlocked}
+        listOfNotNull(
+            unlock("first")?.takeIf{p.completed>=1},
+            unlock("streak7")?.takeIf{p.overallStreak>=7},
+            unlock("streak30")?.takeIf{p.overallStreak>=30},
+            unlock("tasks100")?.takeIf{p.completed>=100},
+            unlock("comeback")?.takeIf{p.recovered>=1},
+            unlock("nomiss")?.takeIf{p.completed>=20 && p.failed==0},
+            unlock("master")?.takeIf{p.disciplineScore>=100}
+        ).forEach { achievementDao.update(it.copy(unlocked=true,unlockedAt=System.currentTimeMillis())) }
+    }
+
+
+    fun exportJson(): String {
+        fun esc(x:String)=x.replace("\\","\\\\").replace("\"","\\\"").replace("\n","\\n")
+        val taskJson=tasks.value.joinToString(",") { """{"id":${it.id},"title":"${esc(it.title)}","description":"${esc(it.description)}","type":"${it.type}","category":"${esc(it.category)}","difficulty":"${it.difficulty}","deadline":"${it.deadline}","xp":${it.xp},"coins":${it.coins},"hpPenalty":${it.hpPenalty},"status":"${it.status}","missionId":${it.missionId ?: "null"},"habitKey":${it.habitKey?.let{"k" -> "\"${esc(k)}\""} ?: "null"}}""" }
+        val missionJson=missions.value.joinToString(",") { """{"id":${it.id},"title":"${esc(it.title)}","goal":"${esc(it.goal)}","startDate":"${it.startDate}","deadline":"${it.deadline}","targetCount":${it.targetCount},"rewardXp":${it.rewardXp},"rewardCoins":${it.rewardCoins},"completed":${it.completed}}""" }
+        val habitJson=habits.value.joinToString(",") { """{"id":${it.id},"name":"${esc(it.name)}","frequency":"${it.frequency}","xp":${it.xp},"coins":${it.coins},"hpPenalty":${it.hpPenalty},"currentStreak":${it.currentStreak},"bestStreak":${it.bestStreak},"completionCount":${it.completionCount},"active":${it.active}}""" }
+        return """{"version":1,"exportedAt":${System.currentTimeMillis()},"player":${player.value.let{"""{"xp":${it.xp},"level":${it.level},"hp":${it.hp},"coins":${it.coins},"overallStreak":${it.overallStreak},"bestStreak":${it.bestStreak},"completed":${it.completed},"failed":${it.failed},"recovered":${it.recovered},"disciplineScore":${it.disciplineScore}}"""},"tasks":[$taskJson],"missions":[$missionJson],"habits":[$habitJson]}"""
+    }
+
+    fun importJson(json:String) {
+        // Import is intentionally conservative: only trusted app exports are accepted.
+        viewModelScope.launch {
+            try {
+                val o=org.json.JSONObject(json)
+                val po=o.optJSONObject("player")
+                if(po!=null) playerDao.save(Player(
+                    xp=po.optInt("xp"),level=po.optInt("level",1),hp=po.optInt("hp",100),coins=po.optInt("coins"),
+                    overallStreak=po.optInt("overallStreak"),bestStreak=po.optInt("bestStreak"),
+                    completed=po.optInt("completed"),failed=po.optInt("failed"),recovered=po.optInt("recovered"),
+                    disciplineScore=po.optInt("disciplineScore")
+                ))
+                tasksDao.clear(); missionDao.clear(); habitDao.clear()
+                val ta=o.optJSONArray("tasks")
+                if(ta!=null) for(i in 0 until ta.length()) {
+                    val x=ta.getJSONObject(i)
+                    tasksDao.insert(Task(
+                        id=0,title=x.optString("title"),description=x.optString("description"),
+                        type=runCatching{TaskType.valueOf(x.optString("type"))}.getOrDefault(TaskType.ONE_TIME),
+                        category=x.optString("category","General"),
+                        difficulty=runCatching{Difficulty.valueOf(x.optString("difficulty"))}.getOrDefault(Difficulty.MEDIUM),
+                        deadline=x.optString("deadline"),xp=x.optInt("xp",20),coins=x.optInt("coins",10),hpPenalty=x.optInt("hpPenalty",10),
+                        status=runCatching{TaskStatus.valueOf(x.optString("status"))}.getOrDefault(TaskStatus.PENDING),
+                        missionId=if(x.isNull("missionId")) null else x.optLong("missionId"),
+                        habitKey=if(x.isNull("habitKey")) null else x.optString("habitKey")
+                    ))
+                }
+                val ma=o.optJSONArray("missions")
+                if(ma!=null) for(i in 0 until ma.length()) { val x=ma.getJSONObject(i); missionDao.insert(Mission(
+                    title=x.optString("title"),goal=x.optString("goal"),startDate=x.optString("startDate"),deadline=x.optString("deadline"),
+                    targetCount=x.optInt("targetCount",30),rewardXp=x.optInt("rewardXp",200),rewardCoins=x.optInt("rewardCoins",100),completed=x.optBoolean("completed")
+                )) }
+                val ha=o.optJSONArray("habits")
+                if(ha!=null) for(i in 0 until ha.length()) { val x=ha.getJSONObject(i); habitDao.insert(Habit(
+                    name=x.optString("name"),frequency=x.optString("frequency","DAILY"),xp=x.optInt("xp",10),coins=x.optInt("coins",5),
+                    hpPenalty=x.optInt("hpPenalty",5),currentStreak=x.optInt("currentStreak"),bestStreak=x.optInt("bestStreak"),
+                    completionCount=x.optInt("completionCount"),active=x.optBoolean("active",true)
+                )) }
+            } catch (_:Exception) {}
+        }
+    }
+
+    fun resetAll() {
+        viewModelScope.launch {
+            tasksDao.clear(); missionDao.clear(); habitDao.clear(); dailyDao.clear()
+            playerDao.save(Player())
+            shopDao.insertAll(AppDefaults.shop)
+            achievementDao.insertAll(AppDefaults.achievements)
+        }
+    }
+}
+
+==========================================================================================
+FILE: app/src/main/java/com/disciplinequest/app/Prefs.kt
+==========================================================================================
+package com.disciplinequest.app
+
+import android.content.Context
+
+class Prefs(context: Context) {
+    private val p = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+    var language: String
+        get() = p.getString("language","en") ?: "en"
+        set(v) = p.edit().putString("language",v).apply()
+    var notifications: Boolean
+        get() = p.getBoolean("notifications", true)
+        set(v) = p.edit().putBoolean("notifications",v).apply()
+    var geminiKey: String
+        get() = p.getString("gemini_key","") ?: ""
+        set(v) = p.edit().putString("gemini_key",v.trim()).apply()
+}
+
+==========================================================================================
+FILE: app/src/main/java/com/disciplinequest/app/ReminderReceiver.kt
+==========================================================================================
+package com.disciplinequest.app
+
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import androidx.core.app.NotificationCompat
+
+class ReminderReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent?) {
+        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val channel = NotificationChannel("discipline","Discipline reminders",NotificationManager.IMPORTANCE_DEFAULT)
+        manager.createNotificationChannel(channel)
+        val n = NotificationCompat.Builder(context,"discipline")
+            .setSmallIcon(com.disciplinequest.app.R.drawable.app_icon)
+            .setContentTitle("DISCIPLINE QUEST")
+            .setContentText("Check today's mission and tasks.")
+            .setAutoCancel(true)
+            .build()
+        manager.notify(9001,n)
+    }
+}
+
+==========================================================================================
+FILE: app/src/main/java/com/disciplinequest/app/ReminderScheduler.kt
+==========================================================================================
+package com.disciplinequest.app
+
+import android.app.AlarmManager
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
+import java.util.Calendar
+
+object ReminderScheduler {
+    fun schedule(context: Context) {
+        val alarm = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val intent = PendingIntent.getBroadcast(
+            context, 9001, Intent(context, ReminderReceiver::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val c = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, 8); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0)
+            if (timeInMillis <= System.currentTimeMillis()) add(Calendar.DAY_OF_YEAR, 1)
+        }
+        alarm.setInexactRepeating(AlarmManager.RTC_WAKEUP,c.timeInMillis,AlarmManager.INTERVAL_DAY,intent)
+    }
+    fun cancel(context: Context) {
+        val alarm = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val intent = PendingIntent.getBroadcast(
+            context, 9001, Intent(context, ReminderReceiver::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        alarm.cancel(intent)
+    }
+}
+
+==========================================================================================
+FILE: app/src/main/java/com/disciplinequest/app/ai/GeminiCoach.kt
+==========================================================================================
+package com.disciplinequest.app.ai
+
+import okhttp3.*
+import org.json.JSONObject
+import java.io.IOException
+
+data class AiTaskDraft(
+    val title: String,
+    val description: String,
+    val deadline: String,
+    val difficulty: String,
+    val xp: Int,
+    val coins: Int,
+    val hpPenalty: Int
+)
+
+data class AiPlanDraft(val missionTitle: String, val goal: String, val tasks: List<AiTaskDraft>)
+
+class GeminiCoach(private val client: OkHttpClient = OkHttpClient()) {
+    companion object {
+        const val MODEL = "gemini-3.8-flash"
+    }
+
+    fun generate(goal: String, days: Int, callback: (Result<AiPlanDraft>) -> Unit) {
+        val key = currentKey ?: return callback(Result.failure(IllegalStateException("NO_API_KEY")))
+        val prompt = """
+            You are a disciplined productivity coach.
+            Create a realistic $days-day mission from this goal: $goal
+            Return ONLY valid JSON:
+            {
+              "missionTitle":"...",
+              "goal":"...",
+              "tasks":[
+                {
+                  "title":"...",
+                  "description":"...",
+                  "deadline":"YYYY-MM-DD",
+                  "difficulty":"EASY|MEDIUM|HARD|CRITICAL",
+                  "xp":10,
+                  "coins":5,
+                  "hpPenalty":5
+                }
+              ]
+            }
+            Keep tasks practical. Never invent completion results or player statistics.
+        """.trimIndent()
+
+        val body = JSONObject()
+            .put("contents", org.json.JSONArray()
+                .put(JSONObject().put("parts", org.json.JSONArray().put(JSONObject().put("text", prompt)))))
+            .put("generationConfig", JSONObject().put("responseMimeType","application/json"))
+            .toString()
+
+        val request = Request.Builder()
+            .url("https://generativelanguage.googleapis.com/v1beta/models/$MODEL:generateContent?key=$key")
+            .post(body.toRequestBody("application/json".toMediaType()))
+            .build()
+
+        client.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) = callback(Result.failure(e))
+            override fun onResponse(call: Call, response: Response) {
+                response.use {
+                    if (!it.isSuccessful) return callback(Result.failure(IOException("Gemini HTTP ${it.code}")))
+                    try {
+                        val root = JSONObject(it.body!!.string())
+                        val text = root.getJSONArray("candidates").getJSONObject(0)
+                            .getJSONObject("content").getJSONArray("parts").getJSONObject(0).getString("text")
+                        val clean = text.trim().removePrefix("```json").removeSuffix("```").trim()
+                        val j = JSONObject(clean)
+                        val arr = j.getJSONArray("tasks")
+                        val list = buildList {
+                            for (i in 0 until arr.length()) {
+                                val t = arr.getJSONObject(i)
+                                add(AiTaskDraft(
+                                    t.optString("title","Task"),
+                                    t.optString("description",""),
+                                    t.optString("deadline",""),
+                                    t.optString("difficulty","MEDIUM"),
+                                    t.optInt("xp",20),
+                                    t.optInt("coins",10),
+                                    t.optInt("hpPenalty",10)
+                                ))
+                            }
+                        }
+                        callback(Result.success(AiPlanDraft(
+                            j.optString("missionTitle","AI Mission"),
+                            j.optString("goal",goal),
+                            list
+                        )))
+                    } catch (e: Exception) { callback(Result.failure(e)) }
+                }
+            }
+        })
+    }
+
+    private var currentKey: String? = null
+    fun setKey(key: String) { currentKey = key.trim().ifBlank { null } }
+}
+
+==========================================================================================
+FILE: app/src/main/java/com/disciplinequest/app/data/AppDatabase.kt
+==========================================================================================
+package com.disciplinequest.app.data
+
+import android.content.Context
+import androidx.room.Database
+import androidx.room.Room
+import androidx.room.RoomDatabase
+
+@androidx.room.TypeConverters(Converters::class)
+@Database(
+    entities = [Task::class, Mission::class, Habit::class, ShopItem::class, Achievement::class, DailyRecord::class, Player::class],
+    version = 1,
+    exportSchema = false
+)
+abstract class AppDatabase : RoomDatabase() {
+    abstract fun taskDao(): TaskDao
+    abstract fun missionDao(): MissionDao
+    abstract fun habitDao(): HabitDao
+    abstract fun playerDao(): PlayerDao
+    abstract fun shopDao(): ShopDao
+    abstract fun achievementDao(): AchievementDao
+    abstract fun dailyDao(): DailyDao
+
+    companion object {
+        @Volatile private var instance: AppDatabase? = null
+        fun get(context: Context): AppDatabase = instance ?: synchronized(this) {
+            instance ?: Room.databaseBuilder(context.applicationContext, AppDatabase::class.java, "discipline_quest.db")
+                .fallbackToDestructiveMigration().build().also { instance = it }
+        }
+    }
+}
+
+==========================================================================================
+FILE: app/src/main/java/com/disciplinequest/app/data/Converters.kt
+==========================================================================================
+package com.disciplinequest.app.data
+
+import androidx.room.TypeConverter
+
+class Converters {
+    @TypeConverter fun taskTypeToString(v: TaskType?) = v?.name
+    @TypeConverter fun stringToTaskType(v: String?) = v?.let { runCatching { TaskType.valueOf(it) }.getOrDefault(TaskType.ONE_TIME) }
+
+    @TypeConverter fun difficultyToString(v: Difficulty?) = v?.name
+    @TypeConverter fun stringToDifficulty(v: String?) = v?.let { runCatching { Difficulty.valueOf(it) }.getOrDefault(Difficulty.MEDIUM) }
+
+    @TypeConverter fun statusToString(v: TaskStatus?) = v?.name
+    @TypeConverter fun stringToStatus(v: String?) = v?.let { runCatching { TaskStatus.valueOf(it) }.getOrDefault(TaskStatus.PENDING) }
+}
+
+==========================================================================================
+FILE: app/src/main/java/com/disciplinequest/app/data/Daos.kt
+==========================================================================================
+package com.disciplinequest.app.data
+
+import androidx.room.*
+import kotlinx.coroutines.flow.Flow
+
+@Dao
+interface TaskDao {
+    @Query("SELECT * FROM tasks ORDER BY deadline ASC, id DESC") fun observeAll(): Flow<List<Task>>
+    @Insert suspend fun insert(task: Task): Long
+    @Insert suspend fun insertAll(tasks: List<Task>)
+    @Update suspend fun update(task: Task)
+    @Delete suspend fun delete(task: Task)
+    @Query("DELETE FROM tasks") suspend fun clear()
+}
+
+@Dao
+interface MissionDao {
+    @Query("SELECT * FROM missions ORDER BY deadline ASC") fun observeAll(): Flow<List<Mission>>
+    @Insert suspend fun insert(mission: Mission): Long
+    @Update suspend fun update(mission: Mission)
+    @Delete suspend fun delete(mission: Mission)
+    @Query("DELETE FROM missions") suspend fun clear()
+}
+
+@Dao
+interface HabitDao {
+    @Query("SELECT * FROM habits ORDER BY active DESC, id DESC") fun observeAll(): Flow<List<Habit>>
+    @Insert suspend fun insert(habit: Habit): Long
+    @Update suspend fun update(habit: Habit)
+    @Delete suspend fun delete(habit: Habit)
+    @Query("DELETE FROM habits") suspend fun clear()
+}
+
+@Dao
+interface PlayerDao {
+    @Query("SELECT * FROM player WHERE id=1 LIMIT 1") fun observe(): Flow<Player?>
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun save(player: Player)
+}
+
+@Dao
+interface ShopDao {
+    @Query("SELECT * FROM shop_items ORDER BY category, price") fun observeAll(): Flow<List<ShopItem>>
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun insertAll(items: List<ShopItem>)
+    @Update suspend fun update(item: ShopItem)
+    @Query("UPDATE shop_items SET equipped=0 WHERE category=:category") suspend fun unequipCategory(category: String)
+}
+
+@Dao
+interface AchievementDao {
+    @Query("SELECT * FROM achievements ORDER BY unlocked DESC, id") fun observeAll(): Flow<List<Achievement>>
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun insertAll(items: List<Achievement>)
+    @Update suspend fun update(item: Achievement)
+}
+
+@Dao
+interface DailyDao {
+    @Query("SELECT * FROM daily_records ORDER BY date DESC") fun observeAll(): Flow<List<DailyRecord>>
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun save(record: DailyRecord)
+    @Query("DELETE FROM daily_records") suspend fun clear()
+}
+
+==========================================================================================
+FILE: app/src/main/java/com/disciplinequest/app/data/Entities.kt
+==========================================================================================
+package com.disciplinequest.app.data
+
+import androidx.room.Entity
+import androidx.room.PrimaryKey
+
+enum class TaskType { ONE_TIME, HABIT }
+enum class Difficulty { EASY, MEDIUM, HARD, CRITICAL }
+enum class TaskStatus { PENDING, COMPLETED, FAILED, RECOVERED }
+
+@Entity(tableName = "tasks")
+data class Task(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val title: String,
+    val description: String = "",
+    val type: TaskType = TaskType.ONE_TIME,
+    val category: String = "General",
+    val difficulty: Difficulty = Difficulty.MEDIUM,
+    val deadline: String,
+    val xp: Int = 20,
+    val coins: Int = 10,
+    val hpPenalty: Int = 10,
+    val status: TaskStatus = TaskStatus.PENDING,
+    val missionId: Long? = null,
+    val habitKey: String? = null,
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+@Entity(tableName = "missions")
+data class Mission(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val title: String,
+    val goal: String,
+    val startDate: String,
+    val deadline: String,
+    val targetCount: Int = 30,
+    val rewardXp: Int = 200,
+    val rewardCoins: Int = 100,
+    val completed: Boolean = false
+)
+
+@Entity(tableName = "habits")
+data class Habit(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val frequency: String = "DAILY",
+    val xp: Int = 10,
+    val coins: Int = 5,
+    val hpPenalty: Int = 5,
+    val currentStreak: Int = 0,
+    val bestStreak: Int = 0,
+    val completionCount: Int = 0,
+    val active: Boolean = true
+)
+
+@Entity(tableName = "shop_items")
+data class ShopItem(
+    @PrimaryKey val id: String,
+    val name: String,
+    val category: String,
+    val price: Int,
+    val owned: Boolean = false,
+    val equipped: Boolean = false
+)
+
+@Entity(tableName = "achievements")
+data class Achievement(
+    @PrimaryKey val id: String,
+    val title: String,
+    val description: String,
+    val unlocked: Boolean = false,
+    val unlockedAt: Long? = null
+)
+
+@Entity(tableName = "daily_records")
+data class DailyRecord(
+    @PrimaryKey val date: String,
+    val completed: Int = 0,
+    val failed: Int = 0,
+    val recovered: Int = 0,
+    val xpEarned: Int = 0,
+    val coinsEarned: Int = 0,
+    val hpAtEnd: Int = 100
+)
+
+@Entity(tableName = "player")
+data class Player(
+    @PrimaryKey val id: Int = 1,
+    val xp: Int = 0,
+    val level: Int = 1,
+    val hp: Int = 100,
+    val coins: Int = 0,
+    val overallStreak: Int = 0,
+    val bestStreak: Int = 0,
+    val completed: Int = 0,
+    val failed: Int = 0,
+    val recovered: Int = 0,
+    val disciplineScore: Int = 0,
+    val lastActiveDate: String? = null
+)
+
+==========================================================================================
+FILE: app/src/main/res/values/colors.xml
+==========================================================================================
+<resources>
+    <color name="black">#050505</color>
+    <color name="red">#FF1A1A</color>
+</resources>
+
+==========================================================================================
+FILE: app/src/main/res/values/styles.xml
+==========================================================================================
+<resources>
+    <style name="Theme.DisciplineQuest" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:statusBarColor">#050505</item>
+        <item name="android:navigationBarColor">#050505</item>
+        <item name="android:windowActionModeOverlay">true</item>
+    </style>
+</resources>
+
+==========================================================================================
+FILE: build.gradle.kts
+==========================================================================================
+plugins {
+    id("com.android.application") version "8.7.3" apply false
+    id("org.jetbrains.kotlin.android") version "2.0.21" apply false
+    id("org.jetbrains.kotlin.plugin.compose") version "2.0.21" apply false
+    id("com.google.devtools.ksp") version "2.0.21-1.0.28" apply false
+}
+
+==========================================================================================
+FILE: gradle.properties
+==========================================================================================
+org.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8
+android.useAndroidX=true
+kotlin.code.style=official
+
+==========================================================================================
+FILE: settings.gradle.kts
+==========================================================================================
+pluginManagement {
+    repositories { google(); mavenCentral(); gradlePluginPortal() }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories { google(); mavenCentral() }
+}
+rootProject.name = "DisciplineQuest"
+include(":app")
